@@ -22,6 +22,7 @@ import org.apache.calcite.sql.fun.SqlTrimFunction;
 import org.apache.calcite.sql.parser.SqlParserPos;
 import org.apache.calcite.sql.type.OperandTypes;
 import org.apache.calcite.sql.validate.SqlValidator;
+import org.apache.calcite.sql.validate.SqlValidatorImpl;
 import org.apache.calcite.sql.validate.SqlValidatorScope;
 
 import com.google.common.base.Preconditions;
@@ -433,6 +434,15 @@ public class SqlJdbcFunctionCall extends SqlFunction {
     return super.createCall(functionQualifier, pos, operands);
   }
 
+  @Override public SqlNode rewriteCall(SqlValidator validator,
+      SqlCall call) {
+    if (null == lookupMakeCallObj) {
+      throw validator.newValidationError(call,
+          RESOURCE.functionUndefined(getName()));
+    }
+    return lookupMakeCallObj.getOperator().rewriteCall(validator, call);
+  }
+
   public SqlCall getLookupCall() {
     if (null == lookupCall) {
       lookupCall =
@@ -456,7 +466,7 @@ public class SqlJdbcFunctionCall extends SqlFunction {
 
     for (SqlNode operand : call.getOperandList()) {
       RelDataType nodeType = validator.deriveType(scope, operand);
-      validator.setValidatedNodeType(operand, nodeType);
+      ((SqlValidatorImpl) validator).setValidatedNodeType(operand, nodeType);
     }
     return validateOperands(validator, scope, call);
   }
@@ -542,7 +552,7 @@ public class SqlJdbcFunctionCall extends SqlFunction {
   private interface MakeCall {
     /**
      * Creates and return a {@link SqlCall}. If the MakeCall strategy object
-     * was created with a reording specified the call will be created with
+     * was created with a reordering specified the call will be created with
      * the operands reordered, otherwise no change of ordering is applied
      *
      * @param operands Operands
@@ -697,7 +707,17 @@ public class SqlJdbcFunctionCall extends SqlFunction {
                   operands[0]);
             }
           });
+      map.put("YEAR", simple(SqlStdOperatorTable.YEAR));
       map.put("QUARTER", simple(SqlStdOperatorTable.QUARTER));
+      map.put("MONTH", simple(SqlStdOperatorTable.MONTH));
+      map.put("WEEK", simple(SqlStdOperatorTable.WEEK));
+      map.put("DAYOFYEAR", simple(SqlStdOperatorTable.DAYOFYEAR));
+      map.put("DAYOFMONTH", simple(SqlStdOperatorTable.DAYOFMONTH));
+      map.put("DAYOFWEEK", simple(SqlStdOperatorTable.DAYOFWEEK));
+      map.put("HOUR", simple(SqlStdOperatorTable.HOUR));
+      map.put("MINUTE", simple(SqlStdOperatorTable.MINUTE));
+      map.put("SECOND", simple(SqlStdOperatorTable.SECOND));
+
       map.put("RTRIM",
           new SimpleMakeCall(SqlStdOperatorTable.TRIM) {
             @Override public SqlCall createCall(SqlParserPos pos,
@@ -710,12 +730,24 @@ public class SqlJdbcFunctionCall extends SqlFunction {
             }
           });
       map.put("SUBSTRING", simple(SqlStdOperatorTable.SUBSTRING));
+      map.put("REPLACE", simple(SqlStdOperatorTable.REPLACE));
       map.put("UCASE", simple(SqlStdOperatorTable.UPPER));
       map.put("CURDATE", simple(SqlStdOperatorTable.CURRENT_DATE));
       map.put("CURTIME", simple(SqlStdOperatorTable.LOCALTIME));
       map.put("NOW", simple(SqlStdOperatorTable.CURRENT_TIMESTAMP));
       map.put("TIMESTAMPADD", simple(SqlStdOperatorTable.TIMESTAMP_ADD));
       map.put("TIMESTAMPDIFF", simple(SqlStdOperatorTable.TIMESTAMP_DIFF));
+
+      map.put("DATABASE", simple(SqlStdOperatorTable.CURRENT_CATALOG));
+      map.put("IFNULL",
+          new SimpleMakeCall(SqlStdOperatorTable.COALESCE) {
+            @Override public SqlCall createCall(SqlParserPos pos,
+                SqlNode... operands) {
+              assert 2 == operands.length;
+              return super.createCall(pos, operands);
+            }
+          });
+      map.put("USER", simple(SqlStdOperatorTable.CURRENT_USER));
       map.put("CONVERT",
           new SimpleMakeCall(SqlStdOperatorTable.CAST) {
             @Override public SqlCall createCall(SqlParserPos pos,

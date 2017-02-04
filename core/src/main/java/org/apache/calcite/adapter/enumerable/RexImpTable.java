@@ -65,6 +65,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Type;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -106,6 +107,7 @@ import static org.apache.calcite.sql.fun.SqlStdOperatorTable.CONCAT;
 import static org.apache.calcite.sql.fun.SqlStdOperatorTable.COS;
 import static org.apache.calcite.sql.fun.SqlStdOperatorTable.COT;
 import static org.apache.calcite.sql.fun.SqlStdOperatorTable.COUNT;
+import static org.apache.calcite.sql.fun.SqlStdOperatorTable.CURRENT_CATALOG;
 import static org.apache.calcite.sql.fun.SqlStdOperatorTable.CURRENT_DATE;
 import static org.apache.calcite.sql.fun.SqlStdOperatorTable.CURRENT_PATH;
 import static org.apache.calcite.sql.fun.SqlStdOperatorTable.CURRENT_ROLE;
@@ -170,6 +172,7 @@ import static org.apache.calcite.sql.fun.SqlStdOperatorTable.RAND;
 import static org.apache.calcite.sql.fun.SqlStdOperatorTable.RAND_INTEGER;
 import static org.apache.calcite.sql.fun.SqlStdOperatorTable.RANK;
 import static org.apache.calcite.sql.fun.SqlStdOperatorTable.REINTERPRET;
+import static org.apache.calcite.sql.fun.SqlStdOperatorTable.REPLACE;
 import static org.apache.calcite.sql.fun.SqlStdOperatorTable.ROUND;
 import static org.apache.calcite.sql.fun.SqlStdOperatorTable.ROW;
 import static org.apache.calcite.sql.fun.SqlStdOperatorTable.ROW_NUMBER;
@@ -218,6 +221,7 @@ public class RexImpTable {
     defineMethod(LOWER, BuiltInMethod.LOWER.method, NullPolicy.STRICT);
     defineMethod(INITCAP,  BuiltInMethod.INITCAP.method, NullPolicy.STRICT);
     defineMethod(SUBSTRING, BuiltInMethod.SUBSTRING.method, NullPolicy.STRICT);
+    defineMethod(REPLACE, BuiltInMethod.REPLACE.method, NullPolicy.STRICT);
     defineMethod(TRANSLATE3, BuiltInMethod.TRANSLATE3.method, NullPolicy.STRICT);
     defineMethod(CHARACTER_LENGTH, BuiltInMethod.CHAR_LENGTH.method,
         NullPolicy.STRICT);
@@ -388,6 +392,7 @@ public class RexImpTable {
     map.put(SYSTEM_USER, systemFunctionImplementor);
     map.put(CURRENT_PATH, systemFunctionImplementor);
     map.put(CURRENT_ROLE, systemFunctionImplementor);
+    map.put(CURRENT_CATALOG, systemFunctionImplementor);
 
     // Current time functions
     map.put(CURRENT_TIME, systemFunctionImplementor);
@@ -1033,7 +1038,7 @@ public class RexImpTable {
           Expressions.constant(divider.intValueExact()));
     }
     final BigDecimal x =
-        multiplier.divide(divider, BigDecimal.ROUND_UNNECESSARY);
+        multiplier.divide(divider, RoundingMode.UNNECESSARY);
     switch (x.compareTo(BigDecimal.ONE)) {
     case 0:
       return e;
@@ -1659,8 +1664,9 @@ public class RexImpTable {
       assert translatedOperands.size() == 1;
       ConstantExpression x = (ConstantExpression) translatedOperands.get(0);
       List<String> names = Util.stringToList((String) x.value);
-      RelOptTable table =
-          Prepare.CatalogReader.THREAD_LOCAL.get().getTable(names);
+      final Prepare.CatalogReader catalogReader =
+          Prepare.CatalogReader.THREAD_LOCAL.get();
+      RelOptTable table = catalogReader.getTable(names);
       System.out.println("Now, do something with table " + table);
       return super.implement(translator, call, translatedOperands);
     }
@@ -1990,9 +1996,10 @@ public class RexImpTable {
       } else if (op == SYSTEM_USER) {
         return Expressions.constant(System.getProperty("user.name"));
       } else if (op == CURRENT_PATH
-          || op == CURRENT_ROLE) {
-        // By default, the CURRENT_ROLE function returns
-        // the empty string because a role has to be set explicitly.
+          || op == CURRENT_ROLE
+          || op == CURRENT_CATALOG) {
+        // By default, the CURRENT_ROLE and CURRENT_CATALOG functions return the
+        // empty string because a role or a catalog has to be set explicitly.
         return Expressions.constant("");
       } else if (op == CURRENT_TIMESTAMP) {
         return Expressions.call(BuiltInMethod.CURRENT_TIMESTAMP.method, root);

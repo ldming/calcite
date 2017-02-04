@@ -18,6 +18,7 @@ package org.apache.calcite.adapter.druid;
 
 import org.apache.calcite.DataContext;
 import org.apache.calcite.avatica.ColumnMetaData;
+import org.apache.calcite.config.CalciteConnectionConfig;
 import org.apache.calcite.config.CalciteConnectionProperty;
 import org.apache.calcite.interpreter.BindableRel;
 import org.apache.calcite.interpreter.Bindables;
@@ -63,12 +64,8 @@ import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 
 import com.google.common.base.Preconditions;
-import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
-
-import org.joda.time.Interval;
-import org.joda.time.chrono.ISOChronology;
 
 import java.io.IOException;
 import java.io.StringWriter;
@@ -87,7 +84,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
 
   final RelOptTable table;
   final DruidTable druidTable;
-  final ImmutableList<Interval> intervals;
+  final ImmutableList<LocalInterval> intervals;
   final ImmutableList<RelNode> rels;
 
   private static final Pattern VALID_SIG = Pattern.compile("sf?p?a?l?");
@@ -105,7 +102,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
    */
   protected DruidQuery(RelOptCluster cluster, RelTraitSet traitSet,
       RelOptTable table, DruidTable druidTable,
-      List<Interval> intervals, List<RelNode> rels) {
+      List<LocalInterval> intervals, List<RelNode> rels) {
     super(cluster, traitSet);
     this.table = table;
     this.druidTable = druidTable;
@@ -145,11 +142,6 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
     final String signature = signature();
     if (!isValidSignature(signature)) {
       return litmus.fail("invalid signature [{}]", signature);
-    }
-    for (Interval interval : intervals) {
-      if (interval.getChronology() != ISOChronology.getInstanceUTC()) {
-        return litmus.fail("interval must be UTC", interval);
-      }
     }
     if (rels.isEmpty()) {
       return litmus.fail("must have at least one rel");
@@ -243,7 +235,8 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
 
   /** Creates a DruidQuery. */
   private static DruidQuery create(RelOptCluster cluster, RelTraitSet traitSet,
-      RelOptTable table, DruidTable druidTable, List<Interval> intervals, List<RelNode> rels) {
+      RelOptTable table, DruidTable druidTable, List<LocalInterval> intervals,
+      List<RelNode> rels) {
     return new DruidQuery(cluster, traitSet, table, druidTable, intervals, rels);
   }
 
@@ -255,7 +248,8 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
   }
 
   /** Extends a DruidQuery. */
-  public static DruidQuery extendQuery(DruidQuery query, List<Interval> intervals) {
+  public static DruidQuery extendQuery(DruidQuery query,
+      List<LocalInterval> intervals) {
     return DruidQuery.create(query.getCluster(), query.getTraitSet(), query.getTable(),
         query.druidTable, intervals, query.rels);
   }
@@ -414,6 +408,9 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
   protected QuerySpec getQuery(RelDataType rowType, RexNode filter, List<RexNode> projects,
       ImmutableBitSet groupSet, List<AggregateCall> aggCalls, List<String> aggNames,
       List<Integer> collationIndexes, List<Direction> collationDirections, Integer fetch) {
+    final CalciteConnectionConfig config =
+        getCluster().getPlanner().getContext()
+            .unwrap(CalciteConnectionConfig.class);
     QueryType queryType = QueryType.SELECT;
     final Translator translator = new Translator(druidTable, rowType);
     List<String> fieldNames = rowType.getFieldNames();
@@ -441,7 +438,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
     // executed as a Timeseries, TopN, or GroupBy in Druid
     final List<String> dimensions = new ArrayList<>();
     final List<JsonAggregation> aggregations = new ArrayList<>();
-    String granularity = "all";
+    Granularity granularity = Granularity.ALL;
     Direction timeSeriesDirection = null;
     JsonLimit limit = null;
     if (groupSet != null) {
@@ -461,7 +458,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
             final String origin = druidTable.getRowType(getCluster().getTypeFactory())
                 .getFieldList().get(ref.getIndex()).getName();
             if (origin.equals(druidTable.timestampFieldName)) {
-              granularity = "none";
+              granularity = Granularity.NONE;
               builder.add(s);
               assert timePositionIdx == -1;
               timePositionIdx = groupKey;
@@ -472,7 +469,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
           } else if (project instanceof RexCall) {
             // Call, check if we should infer granularity
             final RexCall call = (RexCall) project;
-            final String funcGranularity =
+            final Granularity funcGranularity =
                 DruidDateTimeUtils.extractGranularity(call);
             if (funcGranularity != null) {
               granularity = funcGranularity;
@@ -491,7 +488,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
         for (int groupKey : groupSet) {
           final String s = fieldNames.get(groupKey);
           if (s.equals(druidTable.timestampFieldName)) {
-            granularity = "NONE";
+            granularity = Granularity.NONE;
             builder.add(s);
             assert timePositionIdx == -1;
             timePositionIdx = groupKey;
@@ -537,7 +534,12 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
       if (dimensions.isEmpty() && (collations == null || timeSeriesDirection != null)) {
         queryType = QueryType.TIMESERIES;
         assert fetch == null;
-      } else if (dimensions.size() == 1 && sortsMetric && collations.size() == 1 && fetch != null) {
+      } else if (dimensions.size() == 1
+          && granularity == Granularity.ALL
+          && sortsMetric
+          && collations.size() == 1
+          && fetch != null
+          && config.approximateTopN()) {
         queryType = QueryType.TOP_N;
       } else {
         queryType = QueryType.GROUP_BY;
@@ -562,11 +564,17 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
         generator.writeStringField("dataSource", druidTable.dataSource);
         generator.writeBooleanField("descending", timeSeriesDirection != null
             && timeSeriesDirection == Direction.DESCENDING);
-        generator.writeStringField("granularity", granularity);
+        generator.writeStringField("granularity", granularity.value);
         writeFieldIf(generator, "filter", jsonFilter);
         writeField(generator, "aggregations", aggregations);
         writeFieldIf(generator, "postAggregations", null);
         writeField(generator, "intervals", intervals);
+
+        generator.writeFieldName("context");
+        // The following field is necessary to conform with SQL semantics (CALCITE-1589)
+        generator.writeStartObject();
+        generator.writeBooleanField("skipEmptyBuckets", true);
+        generator.writeEndObject();
 
         generator.writeEndObject();
         break;
@@ -576,7 +584,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
 
         generator.writeStringField("queryType", "topN");
         generator.writeStringField("dataSource", druidTable.dataSource);
-        generator.writeStringField("granularity", granularity);
+        generator.writeStringField("granularity", granularity.value);
         generator.writeStringField("dimension", dimensions.get(0));
         generator.writeStringField("metric", fieldNames.get(collationIndexes.get(0)));
         writeFieldIf(generator, "filter", jsonFilter);
@@ -600,7 +608,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
 
         generator.writeStringField("queryType", "groupBy");
         generator.writeStringField("dataSource", druidTable.dataSource);
-        generator.writeStringField("granularity", granularity);
+        generator.writeStringField("granularity", granularity.value);
         writeField(generator, "dimensions", dimensions);
         writeFieldIf(generator, "limitSpec", limit);
         writeFieldIf(generator, "filter", jsonFilter);
@@ -622,7 +630,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
         writeFieldIf(generator, "filter", jsonFilter);
         writeField(generator, "dimensions", translator.dimensions);
         writeField(generator, "metrics", translator.metrics);
-        generator.writeStringField("granularity", granularity);
+        generator.writeStringField("granularity", granularity.value);
 
         generator.writeFieldName("pagingSpec");
         generator.writeStartObject();
@@ -704,9 +712,8 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
     if (o instanceof String) {
       String s = (String) o;
       generator.writeString(s);
-    } else if (o instanceof Interval) {
-      Interval i = (Interval) o;
-      generator.writeString(i.toString());
+    } else if (o instanceof LocalInterval) {
+      generator.writeString(o.toString());
     } else if (o instanceof Integer) {
       Integer i = (Integer) o;
       generator.writeNumber(i);
@@ -720,7 +727,8 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
   }
 
   /** Generates a JSON string to query metadata about a data source. */
-  static String metadataQuery(String dataSourceName, List<Interval> intervals) {
+  static String metadataQuery(String dataSourceName,
+      List<LocalInterval> intervals) {
     final StringWriter sw = new StringWriter();
     final JsonFactory factory = new JsonFactory();
     try {
@@ -737,7 +745,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
       generator.writeEndObject();
       generator.close();
     } catch (IOException e) {
-      throw Throwables.propagate(e);
+      throw new RuntimeException(e);
     }
     return sw.toString();
   }

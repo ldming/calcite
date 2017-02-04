@@ -371,24 +371,24 @@ public class UtilTest {
    */
   @Test public void testCastingList() {
     final List<Number> numberList = new ArrayList<>();
-    numberList.add(new Integer(1));
+    numberList.add(1);
     numberList.add(null);
-    numberList.add(new Integer(2));
+    numberList.add(2);
     List<Integer> integerList = Util.cast(numberList, Integer.class);
     assertEquals(3, integerList.size());
-    assertEquals(new Integer(2), integerList.get(2));
+    assertEquals(Integer.valueOf(2), integerList.get(2));
 
     // Nulls are OK.
     assertNull(integerList.get(1));
 
     // Can update the underlying list.
     integerList.set(1, 345);
-    assertEquals(new Integer(345), integerList.get(1));
+    assertEquals(Integer.valueOf(345), integerList.get(1));
     integerList.set(1, null);
     assertNull(integerList.get(1));
 
     // Can add a member of the wrong type to the underlying list.
-    numberList.add(new Double(3.1415));
+    numberList.add(3.1415D);
     assertEquals(4, integerList.size());
 
     // Access a member which is of the wrong type.
@@ -1285,7 +1285,8 @@ public class UtilTest {
     assertFalse(Util.isDistinct(Arrays.asList("a", null, "b", null)));
   }
 
-  /** Unit test for {@link Util#intersects(Collection, Collection)}. */
+  /** Unit test for
+   * {@link Util#intersects(java.util.Collection, java.util.Collection)}. */
   @Test public void testIntersects() {
     final List<String> empty = Collections.emptyList();
     final List<String> listA = Collections.singletonList("a");
@@ -1469,11 +1470,12 @@ public class UtilTest {
   }
 
   public void checkHash(double v) {
-    assertThat(new Double(v).hashCode(), is(Utilities.hashCode(v)));
+    assertThat(Double.valueOf(v).hashCode(), is(Utilities.hashCode(v)));
     final long long_ = (long) v;
-    assertThat(new Long(long_).hashCode(), is(Utilities.hashCode(long_)));
+    assertThat(Long.valueOf(long_).hashCode(), is(Utilities.hashCode(long_)));
     final float float_ = (float) v;
-    assertThat(new Float(float_).hashCode(), is(Utilities.hashCode(float_)));
+    assertThat(Float.valueOf(float_).hashCode(),
+        is(Utilities.hashCode(float_)));
     final boolean boolean_ = v != 0;
     assertThat(Boolean.valueOf(boolean_).hashCode(),
         is(Utilities.hashCode(boolean_)));
@@ -1696,6 +1698,42 @@ public class UtilTest {
     assertThat(Util.human(0.0000181111D), equalTo("1.81111E-5"));
     assertThat(Util.human(0.00000181111D), equalTo("1.81111E-6"));
 
+  }
+
+  /** Tests {@link Util#immutableCopy(Iterable)}. */
+  @Test public void testImmutableCopy() {
+    final List<Integer> list3 = Arrays.asList(1, 2, 3);
+    final List<Integer> immutableList3 = ImmutableList.copyOf(list3);
+    final List<Integer> list0 = Arrays.asList();
+    final List<Integer> immutableList0 = ImmutableList.copyOf(list0);
+    final List<Integer> list1 = Arrays.asList(1);
+    final List<Integer> immutableList1 = ImmutableList.copyOf(list1);
+
+    final List<List<Integer>> list301 = Arrays.asList(list3, list0, list1);
+    final List<List<Integer>> immutableList301 = Util.immutableCopy(list301);
+    assertThat(immutableList301.size(), is(3));
+    assertThat(immutableList301, is(list301));
+    assertThat(immutableList301, not(sameInstance(list301)));
+    for (List<Integer> list : immutableList301) {
+      assertThat(list, isA((Class) ImmutableList.class));
+    }
+
+    // if you copy the copy, you get the same instance
+    final List<List<Integer>> immutableList301b =
+        Util.immutableCopy(immutableList301);
+    assertThat(immutableList301b, sameInstance(immutableList301));
+    assertThat(immutableList301b, not(sameInstance(list301)));
+
+    // if the elements of the list are immutable lists, they are not copied
+    final List<List<Integer>> list301c =
+        Arrays.asList(immutableList3, immutableList0, immutableList1);
+    final List<List<Integer>> list301d = Util.immutableCopy(list301c);
+    assertThat(list301d.size(), is(3));
+    assertThat(list301d, is(list301));
+    assertThat(list301d, not(sameInstance(list301)));
+    assertThat(list301d.get(0), sameInstance(immutableList3));
+    assertThat(list301d.get(1), sameInstance(immutableList0));
+    assertThat(list301d.get(2), sameInstance(immutableList1));
   }
 
   @Test public void testAsIndexView() {

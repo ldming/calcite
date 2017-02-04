@@ -99,7 +99,6 @@ import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.sql.validate.SqlValidator;
 import org.apache.calcite.sql2rel.SqlToRelConverter;
 import org.apache.calcite.tools.RelBuilder;
-import org.apache.calcite.util.Util;
 
 import com.google.common.base.Function;
 import com.google.common.collect.ImmutableList;
@@ -223,6 +222,18 @@ public class RelOptRulesTest extends RelOptTestBase {
     final String sql = "SELECT CASE WHEN 1=2 "
       + "THEN cast((values(1)) as integer) "
       + "ELSE 2 end from (values(1))";
+    sql(sql).with(hepPlanner).check();
+  }
+
+  @Test public void testReduceNullableCase2() {
+    HepProgramBuilder builder = new HepProgramBuilder();
+    builder.addRuleClass(ReduceExpressionsRule.class);
+    HepPlanner hepPlanner = new HepPlanner(builder.build());
+    hepPlanner.addRule(ReduceExpressionsRule.PROJECT_INSTANCE);
+
+    final String sql = "SELECT deptno, ename, CASE WHEN 1=2 "
+      + "THEN substring(ename, 1, cast(2 as int)) ELSE NULL end from emp"
+      + " group by deptno, ename, case when 1=2 then substring(ename,1, cast(2 as int))  else null end";
     sql(sql).with(hepPlanner).check();
   }
 
@@ -660,7 +671,7 @@ public class RelOptRulesTest extends RelOptTestBase {
         .checkUnchanged();
   }
 
-  @Test public void testSemiJoinTrim() {
+  @Test public void testSemiJoinTrim() throws Exception {
     final DiffRepository diffRepos = getDiffRepos();
     String sql = diffRepos.expand(null, "${sql}");
 
@@ -678,13 +689,7 @@ public class RelOptRulesTest extends RelOptTestBase {
             typeFactory,
             SqlToRelConverter.Config.DEFAULT);
 
-    final SqlNode sqlQuery;
-    try {
-      sqlQuery = t.parseQuery(sql);
-    } catch (Exception e) {
-      throw Util.newInternal(e);
-    }
-
+    final SqlNode sqlQuery = t.parseQuery(sql);
     final SqlNode validatedQuery = validator.validate(sqlQuery);
     RelRoot root =
         converter.convertQuery(validatedQuery, false, true);
@@ -2820,6 +2825,16 @@ public class RelOptRulesTest extends RelOptTestBase {
         + "where empno NOT IN (\n"
         + "  select deptno from dept\n"
         + "  where emp.job = dept.name)";
+    checkSubQuery(sql).withLateDecorrelation(true).check();
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-1546">[CALCITE-1546]
+   * Sub-queries connected by OR</a>. */
+  @Test public void testWhereOrSubQuery() {
+    final String sql = "select * from emp\n"
+        + "where sal = 4\n"
+        + "or empno NOT IN (select deptno from dept)";
     checkSubQuery(sql).withLateDecorrelation(true).check();
   }
 

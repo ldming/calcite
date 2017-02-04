@@ -100,7 +100,8 @@ public abstract class CalciteSchema {
 
   /** Adds implicit functions to a builder. */
   protected abstract void addImplicitFunctionsToBuilder(
-      ImmutableList.Builder<Function> builder, boolean caseSensitive);
+      ImmutableList.Builder<Function> builder,
+      String name, boolean caseSensitive);
 
   /** Adds implicit function names to a builder. */
   protected abstract void addImplicitFuncNamesToBuilder(
@@ -290,7 +291,7 @@ public abstract class CalciteSchema {
       builder.add(functionEntry.getFunction());
     }
     // Add implicit functions.
-    addImplicitFunctionsToBuilder(builder, caseSensitive);
+    addImplicitFunctionsToBuilder(builder, name, caseSensitive);
     return builder.build();
   }
 
@@ -375,12 +376,25 @@ public abstract class CalciteSchema {
    */
   public static CalciteSchema createRootSchema(boolean addMetadataSchema,
       boolean cache) {
+    return createRootSchema(addMetadataSchema, cache, "");
+  }
+
+  /** Creates a root schema.
+   *
+   * @param addMetadataSchema Whether to add a "metadata" schema containing
+   *              definitions of tables, columns etc.
+   * @param cache If true create {@link CachingCalciteSchema};
+   *                if false create {@link SimpleCalciteSchema}
+   * @param name Schema name
+   */
+  public static CalciteSchema createRootSchema(boolean addMetadataSchema,
+      boolean cache, String name) {
     CalciteSchema rootSchema;
     final Schema schema = new CalciteConnectionImpl.RootSchema();
     if (cache) {
-      rootSchema = new CachingCalciteSchema(null, schema, "");
+      rootSchema = new CachingCalciteSchema(null, schema, name);
     } else {
-      rootSchema = new SimpleCalciteSchema(null, schema, "");
+      rootSchema = new SimpleCalciteSchema(null, schema, name);
     }
     if (addMetadataSchema) {
       rootSchema.add("metadata", MetadataSchema.INSTANCE);
